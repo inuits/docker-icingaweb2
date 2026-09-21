@@ -92,5 +92,6 @@ get_special L10n icinga-L10n
 get_altname icinga-notifications-web notifications
 get_mod pdfexport
 get_mod reporting
+get_altname icinga-sso-web sso
 get_mod vspheredb
 get_mod x509
