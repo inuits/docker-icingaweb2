@@ -6,7 +6,7 @@ IW2SRC="$1"
 export BUILD_MODE="${2:-release}"
 ACTION="${3:-local}"
 IMAGE="${4:-docker.io/icinga/icingaweb2}"
-TAG="${5:-$(date +'%Y%m%d')}"
+TAG="${5:-$(date -u +'%Y%m%d%H%M%S')}"
 
 if [ -z "$IW2SRC" ]; then
 	cat <<EOF >&2

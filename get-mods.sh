@@ -87,6 +87,7 @@ get_mod graphite
 get_altname icingadb-web icingadb
 get_mod idoreports
 get_mod incubator
+get_mod monitoring
 get_altname icinga-kubernetes-web kubernetes
 get_special L10n icinga-L10n
 get_altname icinga-notifications-web notifications
