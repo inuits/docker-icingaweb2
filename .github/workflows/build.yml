@@ -17,7 +17,8 @@ on:
 jobs:
   build:
     name: build
-    runs-on: ubuntu-latest
+    # Pinned: ubuntu-latest is moving to Ubuntu 26; switch deliberately once verified
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       # This is CRITICAL for the GITHUB_TOKEN to push to GHCR
@@ -25,12 +26,7 @@ jobs:
 
     steps:
       - name: Checkout HEAD
-        # Use a built-in cache for the Git repository checkout
-        uses: actions/checkout@v4
-        with:
-          # Enabling 'cache: true' significantly speeds up checkout for large repos
-          # by caching git history and working directory.
-          cache: true
+        uses: actions/checkout@v7
 
       # Calculate the GHCR image name
       - name: Set Image Name Variable
@@ -48,25 +44,18 @@ jobs:
       - name: QEMU
         run: sudo apt-get install -y qemu-user-static binfmt-support
 
+      # No layer cache on purpose: every build must run "apt-get upgrade" afresh
+      # to pick up the latest Debian security updates (PHP, Apache, ...).
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-        with:
-          # Set up the Docker Buildx cache backend to use GitHub Actions' cache service.
-          # This caches the built image layers, making subsequent 'docker buildx' calls much faster.
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+        uses: docker/setup-buildx-action@v4
 
       - name: Log in to the Container registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # The Icinga Web 2 clone step can't be directly cached with actions/cache
-      # because the repository is *cloned* not just a set of *dependencies*.
-      # However, the checkout caching above and buildx caching below will provide the primary speed boosts.
-      #
       # Full clone (no --depth / --filter): any commit must be checkable out and
       # "git archive" inside the Docker build needs all objects locally.
       - name: Icinga Web 2
