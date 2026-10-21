@@ -28,7 +28,7 @@ if ! docker buildx version; then
 fi
 
 OUR_DIR="$(realpath "$(dirname "$0")")"
-COMMON_ARGS=(-t "$IMAGE:$TAG" --build-context "icingaweb2-git=$(realpath "$IW2SRC")/.git/" --build-arg "BUILD_MODE=$BUILD_MODE" "$OUR_DIR")
+COMMON_ARGS=(-t "$IMAGE:$TAG" --build-context "icingaweb2-git=$(realpath "$IW2SRC")/.git/" --build-arg "BUILD_MODE=$BUILD_MODE" --build-arg "MODULES_AS_OF=${MODULES_AS_OF:-}" "$OUR_DIR")
 BUILDX=(docker buildx build --platform "$(cat "${OUR_DIR}/platforms.txt")")
 
 case "$ACTION" in

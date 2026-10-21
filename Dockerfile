@@ -16,6 +16,7 @@ RUN ["mkdir", "/usr-share"]
 WORKDIR /usr-share
 
 ARG BUILD_MODE
+ARG MODULES_AS_OF
 COPY get-mods.sh /
 RUN /get-mods.sh $BUILD_MODE
 

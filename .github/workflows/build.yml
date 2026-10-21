@@ -4,6 +4,15 @@ on:
   schedule:
     - cron: '0 0 * * SUN' # Runs every Sunday at 00:00 UTC
   workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Icinga Web 2 ref to build: commit hash, tag (e.g. v2.13.1) or branch (e.g. main, support/2.13)'
+        required: false
+        default: main
+      modules_as_of:
+        description: 'Module/library versions: "commit" (latest as of the core commit date), "latest", or a date YYYY-MM-DD (latest as of the end of that day, UTC)'
+        required: false
+        default: commit
 
 jobs:
   build:
@@ -23,17 +32,15 @@ jobs:
           # by caching git history and working directory.
           cache: true
 
-      # Calculate the GHCR image name and tag
-      - name: Set Image Tag Variables
+      # Calculate the GHCR image name
+      - name: Set Image Name Variable
         id: vars
         run: |
           # GHCR requires the repository owner/name to be lowercase.
           # ${{ github.repository }} is like "Hbro/docker-icingaweb2".
           # We force it to lowercase for the GHCR path.
           IMAGE_PATH_LOWERCASE="ghcr.io/$(echo ${{ github.repository }} | tr '[:upper:]' '[:lower:]')"
-          DATE_TAG="$(date -u +'%Y%m%d%H%M%S')"
           echo "IMAGE_NAME=$IMAGE_PATH_LOWERCASE" >> $GITHUB_OUTPUT
-          echo "TAG=$DATE_TAG" >> $GITHUB_OUTPUT
 
       - shell: bash
         run: sudo apt-get update
@@ -59,9 +66,76 @@ jobs:
       # The Icinga Web 2 clone step can't be directly cached with actions/cache
       # because the repository is *cloned* not just a set of *dependencies*.
       # However, the checkout caching above and buildx caching below will provide the primary speed boosts.
+      #
+      # Full clone (no --depth / --filter): any commit must be checkable out and
+      # "git archive" inside the Docker build needs all objects locally.
       - name: Icinga Web 2
-        run: git clone --depth 1 https://github.com/Icinga/icingaweb2.git
+        id: iw2
+        env:
+          # Scheduled runs have no inputs: build the latest main with the latest modules
+          REF: ${{ inputs.ref || 'main' }}
+          AS_OF_MODE: ${{ github.event_name != 'workflow_dispatch' && 'latest' || inputs.modules_as_of || 'commit' }}
+        run: |
+          git clone https://github.com/Icinga/icingaweb2.git
+          cd icingaweb2
+
+          SHA="$(git rev-parse --verify --quiet "${REF}^{commit}" || git rev-parse --verify --quiet "origin/${REF}^{commit}" || true)"
+          if [ -z "$SHA" ]; then
+            echo "::error::Ref '${REF}' not found in Icinga Web 2"
+            exit 1
+          fi
+
+          if [ -z "$(git branch -r --contains "$SHA" --list 'origin/main' 'origin/support/*')" ]; then
+            echo "::error::Ref '${REF}' (${SHA}) is not on main or a support/* branch"
+            exit 1
+          fi
+
+          git checkout --detach "$SHA"
+
+          if git show-ref --verify --quiet "refs/tags/${REF}"; then
+            LABEL="$REF"
+          else
+            LABEL="$(git rev-parse --short=12 "$SHA")"
+          fi
+          LABEL="$(tr -c 'A-Za-z0-9_.-' '-' <<<"$LABEL" | sed 's/-$//')"
+          TAG="${LABEL}-$(date -u +'%Y%m%d%H%M%S')"
+
+          case "$AS_OF_MODE" in
+            commit)
+              MODULES_AS_OF="$(git show -s --format=%ct "$SHA")"
+              ;;
+            latest)
+              MODULES_AS_OF=
+              ;;
+            [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9])
+              MODULES_AS_OF="$(date -u -d "${AS_OF_MODE} 23:59:59" +%s)"
+              ;;
+            *)
+              echo "::error::modules_as_of must be 'commit', 'latest' or YYYY-MM-DD, got '${AS_OF_MODE}'"
+              exit 1
+              ;;
+          esac
+
+          if [ -n "$MODULES_AS_OF" ]; then
+            AS_OF_DISPLAY="$(date -u -d "@${MODULES_AS_OF}" +'%d/%m/%Y %H:%M:%S UTC')"
+          else
+            AS_OF_DISPLAY=latest
+          fi
+
+          echo "TAG=$TAG" >> "$GITHUB_OUTPUT"
+          echo "MODULES_AS_OF=$MODULES_AS_OF" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Icinga Web 2 ref | \`${REF}\` |"
+            echo "| Commit | \`${SHA}\` |"
+            echo "| Image tag | \`${TAG}\` |"
+            echo "| Modules as of | ${AS_OF_DISPLAY} |"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Build and Push to GHCR
-        # Pass the full image name (4th arg) and the date tag (5th arg)
-        run: ./build.bash ./icingaweb2 release push ${{ steps.vars.outputs.IMAGE_NAME }} ${{ steps.vars.outputs.TAG }}
+        # Pass the full image name (4th arg) and the ref/date tag (5th arg)
+        env:
+          MODULES_AS_OF: ${{ steps.iw2.outputs.MODULES_AS_OF }}
+        run: ./build.bash ./icingaweb2 release push ${{ steps.vars.outputs.IMAGE_NAME }} ${{ steps.iw2.outputs.TAG }}

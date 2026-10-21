@@ -17,11 +17,33 @@ get_first_line() {
   cat >/dev/null
 }
 
+# Tags sorted by version (newest first), limited to those created at or before $MODULES_AS_OF (if set)
+get_tags () {
+	git -C dockerweb2-temp for-each-ref --sort=-version:refname --format='%(creatordate:unix) %(refname:short)' refs/tags \
+		|awk -v asof="$MODULES_AS_OF" 'asof == "" || $1 <= asof { print $2 }'
+}
+
 get_tag () {
-	if git -C dockerweb2-temp tag |grep -vFe - >/dev/null; then # ex. RCs
-		git -C dockerweb2-temp tag --sort=-version:refname |grep -vFe - |get_first_line
+	local TAGS
+	TAGS="$(get_tags)"
+
+	if [ -z "$TAGS" ]; then
+		return 0
+	fi
+
+	if grep -vFe - <<<"$TAGS" >/dev/null; then # ex. RCs
+		grep -vFe - <<<"$TAGS" |get_first_line
 	else
-		git -C dockerweb2-temp tag --sort=-version:refname |grep -Fe - |get_first_line
+		grep -Fe - <<<"$TAGS" |get_first_line
+	fi
+}
+
+# Latest commit of branch $1 at or before $MODULES_AS_OF (if set)
+get_commit () {
+	if [ -n "$MODULES_AS_OF" ]; then
+		git -C dockerweb2-temp rev-list -1 --before="@$MODULES_AS_OF" "$1"
+	else
+		echo "$1"
 	fi
 }
 
@@ -43,15 +65,23 @@ get_special () {
 						;;
 					icinga-php/*)
 						# Special branch that contains vendored dependencies missing in HEAD
-						REF=snapshot/nightly
+						REF="$(get_commit snapshot/nightly)"
 						;;
 					*)
-						REF=HEAD
+						REF="$(get_commit HEAD)"
 						;;
 				esac
 				;;
 		esac
 
+		if [ -z "$REF" ]; then
+			echo "No version of ${1} at or before ${MODULES_AS_OF}, skipping" >&2
+			echo "${1} skipped" >>"$BUILD_INFO"
+			rm -rf dockerweb2-temp
+			return 0
+		fi
+
+		echo "${1} ${REF} $(git -C dockerweb2-temp rev-parse "${REF}^{commit}")" >>"$BUILD_INFO"
 		git -C dockerweb2-temp archive "--prefix=${2}/" "$REF" |tar -x
 		rm -rf dockerweb2-temp
 	fi
@@ -74,6 +104,16 @@ case "$MODE" in
 	release|snapshot) ;;
 	*) usage ;;
 esac
+
+# Unix timestamp; when set, use the latest versions available at that moment instead of the latest overall
+MODULES_AS_OF="${MODULES_AS_OF:-}"
+case "$MODULES_AS_OF" in
+	'') ;;
+	*[!0-9]*) echo "MODULES_AS_OF must be a unix timestamp, got: ${MODULES_AS_OF}" >&2; exit 1 ;;
+esac
+
+BUILD_INFO="$(pwd)/icingaweb2-build-info.txt"
+echo "mode=${MODE} modules_as_of=${MODULES_AS_OF:-latest}" >"$BUILD_INFO"
 
 get_lib library ipl
 get_lib thirdparty vendor
