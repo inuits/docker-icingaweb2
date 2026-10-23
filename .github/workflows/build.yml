@@ -15,19 +15,20 @@ on:
         default: commit
 
 jobs:
-  build:
-    name: build
+  # Resolve the Icinga Web 2 ref, image tag and module date once for all platforms
+  prepare:
+    name: prepare
     # Pinned: ubuntu-latest is moving to Ubuntu 26; switch deliberately once verified
     runs-on: ubuntu-24.04
     permissions:
       contents: read
-      # This is CRITICAL for the GITHUB_TOKEN to push to GHCR
-      packages: write
+    outputs:
+      image: ${{ steps.vars.outputs.IMAGE_NAME }}
+      sha: ${{ steps.iw2.outputs.SHA }}
+      tag: ${{ steps.iw2.outputs.TAG }}
+      modules_as_of: ${{ steps.iw2.outputs.MODULES_AS_OF }}
 
     steps:
-      - name: Checkout HEAD
-        uses: actions/checkout@v7
-
       # Calculate the GHCR image name
       - name: Set Image Name Variable
         id: vars
@@ -36,29 +37,9 @@ jobs:
           # ${{ github.repository }} is like "Hbro/docker-icingaweb2".
           # We force it to lowercase for the GHCR path.
           IMAGE_PATH_LOWERCASE="ghcr.io/$(echo ${{ github.repository }} | tr '[:upper:]' '[:lower:]')"
-          echo "IMAGE_NAME=$IMAGE_PATH_LOWERCASE" >> $GITHUB_OUTPUT
+          echo "IMAGE_NAME=$IMAGE_PATH_LOWERCASE" >> "$GITHUB_OUTPUT"
 
-      - shell: bash
-        run: sudo apt-get update
-
-      - name: QEMU
-        run: sudo apt-get install -y qemu-user-static binfmt-support
-
-      # No layer cache on purpose: every build must run "apt-get upgrade" afresh
-      # to pick up the latest Debian security updates (PHP, Apache, ...).
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
-
-      - name: Log in to the Container registry
-        uses: docker/login-action@v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      # Full clone (no --depth / --filter): any commit must be checkable out and
-      # "git archive" inside the Docker build needs all objects locally.
-      - name: Icinga Web 2
+      - name: Resolve Icinga Web 2 ref
         id: iw2
         env:
           # Scheduled runs have no inputs: build the latest main with the latest modules
@@ -111,8 +92,11 @@ jobs:
             AS_OF_DISPLAY=latest
           fi
 
-          echo "TAG=$TAG" >> "$GITHUB_OUTPUT"
-          echo "MODULES_AS_OF=$MODULES_AS_OF" >> "$GITHUB_OUTPUT"
+          {
+            echo "SHA=$SHA"
+            echo "TAG=$TAG"
+            echo "MODULES_AS_OF=$MODULES_AS_OF"
+          } >> "$GITHUB_OUTPUT"
 
           {
             echo "| | |"
@@ -123,9 +107,109 @@ jobs:
             echo "| Modules as of | ${AS_OF_DISPLAY} |"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Build and Push to GHCR
-        # Pass the full image name (4th arg) and the ref/date tag (5th arg)
+  # Build each platform on a native runner (no QEMU emulation) and push it untagged, by digest.
+  # Keep the platforms in sync with platforms.txt (used for local multi-platform builds).
+  build:
+    name: build (${{ matrix.platform }})
+    needs: prepare
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      # This is CRITICAL for the GITHUB_TOKEN to push to GHCR
+      packages: write
+    strategy:
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-24.04
+            arch: amd64
+          - platform: linux/arm64/v8
+            runner: ubuntu-24.04-arm
+            arch: arm64
+
+    steps:
+      - name: Checkout HEAD
+        uses: actions/checkout@v7
+
+      # Full clone (no --depth / --filter): any commit must be checkable out and
+      # "git archive" inside the Docker build needs all objects locally.
+      - name: Icinga Web 2
         env:
-          MODULES_AS_OF: ${{ steps.iw2.outputs.MODULES_AS_OF }}
+          SHA: ${{ needs.prepare.outputs.sha }}
+        run: |
+          git clone https://github.com/Icinga/icingaweb2.git
+          git -C icingaweb2 checkout --detach "$SHA"
+
+      # No layer cache on purpose: every build must run "apt-get upgrade" afresh
+      # to pick up the latest Debian security updates (PHP, Apache, ...).
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push by digest
+        env:
+          IMAGE: ${{ needs.prepare.outputs.image }}
+          PLATFORMS: ${{ matrix.platform }}
+          MODULES_AS_OF: ${{ needs.prepare.outputs.modules_as_of }}
           IMAGE_SOURCE: ${{ github.server_url }}/${{ github.repository }}
-        run: ./build.bash ./icingaweb2 release push ${{ steps.vars.outputs.IMAGE_NAME }} ${{ steps.iw2.outputs.TAG }}
+          METADATA_FILE: ${{ runner.temp }}/metadata.json
+        run: |
+          ./build.bash ./icingaweb2 release digest "$IMAGE"
+          DIGEST="$(jq -r '."containerimage.digest"' "$METADATA_FILE")"
+          mkdir -p "$RUNNER_TEMP/digests"
+          touch "$RUNNER_TEMP/digests/${DIGEST#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v7
+        with:
+          name: digests-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # Combine the per-platform images into one multi-platform tag
+  merge:
+    name: merge
+    needs: [prepare, build]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@v8
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: digests-*
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create and push multi-platform tag
+        working-directory: ${{ runner.temp }}/digests
+        env:
+          IMAGE: ${{ needs.prepare.outputs.image }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          SOURCES=()
+          for DIGEST in *; do
+            SOURCES+=("${IMAGE}@sha256:${DIGEST}")
+          done
+          docker buildx imagetools create -t "${IMAGE}:${TAG}" "${SOURCES[@]}"
+          docker buildx imagetools inspect "${IMAGE}:${TAG}"
+          echo "Pushed \`${IMAGE}:${TAG}\`" >> "$GITHUB_STEP_SUMMARY"
