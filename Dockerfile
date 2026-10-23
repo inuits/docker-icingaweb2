@@ -1,15 +1,19 @@
 # Icinga Web 2 Docker image | (c) 2020 Icinga GmbH | GPLv2+
 # Optimized according to best practises recommended by linter toolings by Hans Broeckx
 
-FROM golang:trixie AS entrypoint
+# Cross-compiled natively on the build platform (no QEMU emulation needed)
+FROM --platform=$BUILDPLATFORM golang:trixie AS entrypoint
+ARG TARGETOS
+ARG TARGETARCH
 
 COPY entrypoint /entrypoint
 
 WORKDIR /entrypoint
-RUN ["go", "build", "."]
+RUN CGO_ENABLED=0 GOOS="$TARGETOS" GOARCH="$TARGETARCH" go build .
 
 
-FROM composer:lts AS usr-share
+# Produces architecture-independent PHP sources only, so build it once natively
+FROM --platform=$BUILDPLATFORM composer:lts AS usr-share
 SHELL ["/bin/bash", "-exo", "pipefail", "-c"]
 
 RUN ["mkdir", "/usr-share"]
