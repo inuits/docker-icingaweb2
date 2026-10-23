@@ -127,4 +127,5 @@ jobs:
         # Pass the full image name (4th arg) and the ref/date tag (5th arg)
         env:
           MODULES_AS_OF: ${{ steps.iw2.outputs.MODULES_AS_OF }}
+          IMAGE_SOURCE: ${{ github.server_url }}/${{ github.repository }}
         run: ./build.bash ./icingaweb2 release push ${{ steps.vars.outputs.IMAGE_NAME }} ${{ steps.iw2.outputs.TAG }}

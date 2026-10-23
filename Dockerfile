@@ -9,7 +9,7 @@ WORKDIR /entrypoint
 RUN ["go", "build", "."]
 
 
-FROM composer:lts as usr-share
+FROM composer:lts AS usr-share
 SHELL ["/bin/bash", "-exo", "pipefail", "-c"]
 
 RUN ["mkdir", "/usr-share"]
@@ -57,6 +57,13 @@ COPY php.ini /etc/php/8.4/cli/conf.d/99-docker.ini
 RUN ln -vs /usr/share/icingaweb2/bin/icingacli /usr/local/bin/ \
     && icingacli setup config webserver apache --path=/ --file=/etc/apache2/conf-enabled/icingaweb2.conf \
     && echo 'SetEnvIf X-REMOTE-USER "(.*)" REMOTE_USER=$0' > /etc/apache2/conf-enabled/allow-remote-user.conf
+
+ARG ICINGAWEB2_REVISION
+ARG IMAGE_SOURCE
+LABEL org.opencontainers.image.title="Icinga Web 2" \
+      org.opencontainers.image.licenses="GPL-2.0-or-later" \
+      org.opencontainers.image.revision="$ICINGAWEB2_REVISION" \
+      org.opencontainers.image.source="$IMAGE_SOURCE"
 
 USER www-data
 ENV ICINGAWEB_OFFICIAL_DOCKER_IMAGE=0
