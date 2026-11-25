@@ -123,6 +123,7 @@ get_mod businessprocess
 get_mod cube
 get_mod director
 get_mod fileshipper
+get_mod generictts
 get_mod graphite
 get_altname icingadb-web icingadb
 get_mod idoreports

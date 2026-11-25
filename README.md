@@ -26,7 +26,7 @@ The weekly scheduled build produces `<commit>-<timestamp>` tags from the latest 
 ## What's inside
 
 * [Icinga Web 2] with these libraries and modules:
-  ipl, thirdparty, audit, aws, businessprocess, cube, director, fileshipper, graphite, icingadb,
+  ipl, thirdparty, audit, aws, businessprocess, cube, director, fileshipper, generictts, graphite, icingadb,
   idoreports, incubator, kubernetes, L10n, monitoring, notifications, pdfexport, reporting,
   sso, vspheredb and x509.
 * `/usr/share/icingaweb2-build-info.txt` lists the exact version and commit of every library and module,
